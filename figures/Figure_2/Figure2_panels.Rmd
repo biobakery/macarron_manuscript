@@ -1,0 +1,225 @@
+---
+title: "Figure2 panels of MACARRoN manuscript"
+author: "Amrisha Bhosle"
+date: "2024-01-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, message=FALSE}
+library(ggplot2)
+library(ggridges)
+library(data.table)
+library(tidyverse)
+```
+
+```{r addSmallLegend}
+addSmallLegend <- function(myPlot, pointSize = 1, textSize = 9, spaceLegend = 0.5) {
+  myPlot +
+    guides(shape = guide_legend(override.aes = list(size = pointSize)),
+           color = guide_legend(override.aes = list(size = pointSize))) +
+    theme(legend.title = element_text(size = textSize), 
+          legend.text  = element_text(size = textSize),
+          legend.key.size = unit(spaceLegend, "lines"),
+          legend.box.margin = margin(-10,-10,-10,-10))
+}
+```
+
+### Figure 2A
+```{r figure 2A, fig.width=4, fig.height=3}
+CD_stats <- read.csv("../../output/all_CD_priority_scores.csv")
+annotated_modules <- unique(CD_stats[CD_stats$Covaries_with_standard == 1,"Module"])
+modules <- as.data.frame(table(CD_stats$Module)) %>%
+  rename(module = 1, size = 2) %>%
+  mutate(module = as.numeric(as.character(module))) %>%
+  filter(module > 0) %>%
+  mutate(type = ifelse(module %in% annotated_modules, "annotated", "unannotated"))
+
+#plot
+fig2A <- ggplot(modules, aes(x=size, fill=type, color=type)) + 
+  geom_histogram(position = "identity", binwidth = 50, alpha=0.3, lwd=0.3) + 
+  scale_color_manual(values = c("#DC143C","grey30")) + 
+  scale_fill_manual(values = c("#DC143C","grey")) + theme_bw() + 
+  theme(legend.position = c(0.65, 0.60), 
+        legend.background = element_rect(linetype = 2, linewidth=0.35, colour = 1)) + 
+  labs(fill="Module type", color="Module type") + xlab("Size") + ylab("Count") + 
+  theme(axis.text = element_text(size=10), plot.margin=unit(c(0.2,0.4,0.5,0.2),"cm"))
+addSmallLegend(fig2A)
+```
+
+### Figure 2B
+```{r figure 2B, fig.width=9, fig.height=2.5}
+chem_tax <- read.csv("../../input/hmdb_taxonomy.csv")
+# Calculate chemical homogeneity of modules
+module_tax <- CD_stats[CD_stats$Module %in% annotated_modules & CD_stats$HMDB.ID %like% "HMDB", c("Module","HMDB.ID")] %>%
+  rename(module=1, hmdb=2) %>%
+  filter(!grepl("\\*", hmdb)) %>%
+  mutate(class = vapply(hmdb, function(x) chem_tax[chem_tax$HMDB.ID == x, "Class"], character(1))) %>%
+  filter(class != "") %>%
+  unique()
+
+fig2B_df <- as.data.frame(sort(unique(module_tax$module))) %>% 
+  rename(module=1) %>%
+  mutate(num_unique_stds = vapply(module, function(x) module_tax[module_tax$module == x, "hmdb"] |> unique() |> length(), numeric(1))) %>%
+  mutate(num_unique_classes = vapply(module, function(x) module_tax[module_tax$module == x, "class"] |> unique() |> length(), numeric(1))) %>%
+  mutate(max_class = vapply(module, function(x) module_tax[module_tax$module == x, "class"] %>% table() %>% as.data.frame() %>% select(2) %>% max(), numeric(1))) %>%
+  filter(num_unique_stds > 1) %>%
+  mutate(chem_homogen = max_class/num_unique_stds) %>%
+  arrange(num_unique_stds, desc(chem_homogen)) %>%
+  mutate(num_unique_stds = factor(num_unique_stds, levels=sort(unique(num_unique_stds))))
+
+# plot
+fig2B <- ggplot(fig2B_df, aes(x=as.factor(module), y=chem_homogen, fill=as.factor(num_unique_classes))) +
+  geom_point(size=2.25, shape=23, alpha=0.9, stroke=0.3, color="black") + theme_bw() + 
+  facet_grid(cols=vars(num_unique_stds), scales="free", space="free") + 
+  theme(axis.title.x = element_text(size=11), axis.title.y =element_text(size=11), 
+        axis.text.y = element_text(size=9), axis.text.x = element_text(size=9, angle = 90, hjust=0.95),
+        strip.text.x = element_text(size=10),
+        panel.spacing.x = unit(0.1,"lines")) +
+  xlab("Annotated modules") + ylab("Chemical homogeneity") +
+  scale_fill_viridis_d(option="A", direction = -1) + labs(fill="Classes")
+addSmallLegend(fig2B)
+```
+
+### Figure 2C
+```{r figure 2C, fig.height=3, fig.width=3, message=FALSE, warning=FALSE}
+fig2C_df <- read.csv("data/bicors_and_clustering_of_sputum_mbx.csv")
+
+#plot
+fig2C <- ggplot(fig2C_df, aes(y=as.factor(coclustered), x = dist)) +
+  geom_density_ridges(alpha = 0.5, lwd=0.3) + 
+  theme_bw() + labs(fill = "co-clustered") + 
+  ylab("Co-clustered by GNPS") + xlab("bicor") + 
+  theme(legend.position = "none", axis.text = element_text(size = 10), axis.title = element_text(size = 11))
+fig2C
+```
+
+### Figure 2D
+```{r figure 2D, fig.width = 3, fig.height = 3}
+# ∆mzs in real versus random modules
+anno_mods_df <- CD_stats[,c("Module","HMDB.ID","m.z","Covaries_with_standard")] %>%
+  filter(Covaries_with_standard==1)
+
+# Calculate ∆mzs in real modules
+real_dmzs <- NULL
+for(m in annotated_modules){
+  df <- anno_mods_df[anno_mods_df$Module == m,]
+  dmzs <- as.vector(sapply(unique(df[df$HMDB.ID == "","m.z"]), function(x) x - unique(df[df$HMDB.ID != "","m.z"])))
+  module_wise_dmzs <- as.data.frame(cbind(m, dmzs))
+  real_dmzs <- rbind(real_dmzs,module_wise_dmzs)
+}
+colnames(real_dmzs) <- c("module","dmz")
+real_dmzs$type <- "real"
+
+# Calculate ∆mzs in shuffled modules
+iteration_dmzs <- NULL
+for(n in seq(1:25)){
+  random_dmz <- NULL
+  anno_mods_df$shuffled <- sample(anno_mods_df$Module, size=nrow(anno_mods_df), replace=FALSE)
+  has_std <- unique(anno_mods_df[anno_mods_df$HMDB.ID != "","shuffled"])
+  for(i in has_std){
+    df <- anno_mods_df[anno_mods_df$shuffled == i,]
+    dmzs <- as.vector(sapply(unique(df[df$HMDB.ID == "","m.z"]), function(x) x - unique(df[df$HMDB.ID != "","m.z"])))
+    random_dmz <- append(random_dmz, dmzs)
+  }
+  this_iteration <- as.data.frame(cbind(paste0("iteration",n),random_dmz))
+  colnames(this_iteration) <- c("module","dmz")
+  iteration_dmzs <- rbind(iteration_dmzs, this_iteration)
+  rm(this_iteration, random_dmz)
+}
+iteration_dmzs$type <- "random"
+fig2D_df <- rbind(real_dmzs, iteration_dmzs) %>%
+  as.data.frame() %>%
+  mutate(dmz = as.numeric(as.character(dmz))) %>%
+  mutate(type = factor(type, levels = unique(type))) %>%
+  mutate(module = ifelse(type == "real","real",module)) %>%
+  mutate(module = factor(module, levels=unique(module)))
+
+# plot
+greys <- sample(grep("^gr[ea]y", colours(), value = TRUE),25)
+fig2D <- ggplot(fig2D_df, aes(x=dmz, color=module)) + geom_density(aes(lwd=type)) + 
+  theme_bw() + xlab(expression(Delta*m/z)) + ylab("density") +
+  theme(axis.title = element_text(size=12), axis.text = element_text(size=10), legend.position="none") + 
+  scale_linewidth_manual(values=c(1, 0.4)) + scale_color_manual(values=c("#DC143C",greys), guide="none") + labs(size="")
+fig2D
+```
+
+### Figure 2E
+```{r figure 2E, fig.height=5.5, fig.width=3.5, message=FALSE, warning=FALSE}
+# Count frequency of enriched modification
+# Enrichment analysis code provided separately
+
+modifications_in_modules <- NULL
+for(i in annotated_modules){
+  df <- anno_mods_df[anno_mods_df$Module == i,]
+  dmzs <- as.vector(sapply(unique(df[df$HMDB.ID == "","m.z"]), function(x) x - unique(df[df$HMDB.ID != "","m.z"])))
+  module_wise_dmzs <- as.data.frame(table(round(dmzs)))
+  module_i_count <- as.data.frame(cbind(i, module_wise_dmzs))
+  modifications_in_modules <- rbind(modifications_in_modules, module_i_count)
+}
+real_dmzs_freq <- read.csv("data/fig2E_permutation_dmz_results.csv")
+modifications_in_modules <- modifications_in_modules %>%
+  rename(module=1,dmz=2,freq=3) %>%
+  mutate(dmz = as.numeric(as.character(dmz))) %>%
+  filter(dmz %in% real_dmzs_freq[real_dmzs_freq$adj_p < 0.05,"dmz"]) %>%
+  mutate(type = ifelse(dmz < 0, "neg", "pos"))
+
+fig2E_df <- modifications_in_modules %>%
+  group_by(dmz,type) %>%
+  tally() %>%
+  mutate(perc_mod = (n/length(annotated_modules))*100) %>%
+  arrange(desc(perc_mod)) %>%
+  mutate(x_axis = abs(dmz)) %>%
+  mutate(x_axis = factor(x_axis, levels = unique(x_axis)))
+
+fig2E <- ggplot(fig2E_df, aes(y=x_axis, x=perc_mod, color=type)) + 
+  geom_point(shape=9, size=2, stroke=0.3) + theme_bw() + 
+  scale_color_manual(values=c("#cc222b","blue")) + 
+  theme(axis.text.y = element_text(angle=0, size=9),legend.position = c(0.85, 0.9), 
+        legend.background = element_rect(linetype = 2, linewidth=0.25, colour = 1), 
+        axis.title = element_text(size=10)) + 
+  xlab("% modules") + labs(color=expression(Delta*m/z~sign)) + ylab(expression(Enriched~Delta*m/z))
+fig2E
+```
+
+### Figure 2F
+```{r figure 2F, fig.height=3, fig.width=4, message=FALSE, warning=FALSE}
+# Coverage of modules and ∆mz
+fig2F_1 <- modifications_in_modules %>%
+  group_by(module) %>%
+  tally() %>%
+  mutate(perc = (n/31)*100) %>%
+  mutate(type = "m/zs covered")
+fig2F_2 <- modifications_in_modules %>%
+  group_by(dmz) %>%
+  tally() %>%
+  mutate(perc = (n/length(annotated_modules))*100) %>%
+  mutate(type = "modules covered")
+fig2F_df <- as.data.frame(rbind(fig2F_1[,c(3,4)], fig2F_2[,c(3,4)]))  
+rm(fig2F_1,fig2F_2)
+
+fig2F <- ggplot(fig2F_df, aes(x=perc, fill=type)) + 
+  geom_density(alpha=0.5) + theme_bw() + xlab("% covered") + 
+  theme(legend.position = c(0.75, 0.75), legend.background = element_rect(linetype = 2, linewidth=0.35, colour = 1), axis.text = element_text(size=10), axis.title = element_text(size=12)) + scale_fill_manual(values=c("darkcyan","darkgoldenrod")) + labs(fill="Percentage of")
+fig2F
+```
+
+### Figure 2G
+```{r figure 2G, fig.height=3, fig.width=5}
+#Relationship between ∆mz coverage and number of standards and size of the modules
+fig2G_df <- modifications_in_modules %>%
+  group_by(module) %>%
+  tally() %>%
+  mutate(perc = (n/31)*100) %>%
+  mutate(size = modules[module,"size"]) %>%
+  mutate(num_stds = vapply(module, function(x) CD_stats[CD_stats$Module == x & CD_stats$Metabolite != "",] |> nrow(), numeric(1)))
+
+fig2G <- ggplot(fig2G_df, aes(x=log2(size), y=perc, fill=num_stds)) + 
+  geom_point(shape=21, size=3, alpha=0.8, stroke=0.2) + theme_bw() + 
+  scale_fill_viridis_c(option="A", direction=-1) + xlab("log2(Size)") + ylab("% ∆m/z coverage") + 
+  theme(legend.position = "right", legend.text = element_text(angle=0)) + labs(fill="#Standards")
+fig2G
+```
